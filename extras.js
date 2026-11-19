@@ -167,14 +167,24 @@ function viewSpending(year) {
   const byTopic = {}; docs.forEach(d => byTopic[d.topic] = (byTopic[d.topic] || 0) + d.amount);
   const byMonth = Array(12).fill(0); docs.forEach(d => byMonth[+(d.date || d.created).slice(5, 7) - 1] += d.amount);
   const maxT = Math.max(1, ...Object.values(byTopic)), maxM = Math.max(1, ...byMonth);
+  const prev = spendDocs(year - 1), prevTotal = prev.reduce((s, d) => s + d.amount, 0);
+  const prevTopic = {}; prev.forEach(d => prevTopic[d.topic] = (prevTopic[d.topic] || 0) + d.amount);
+  const pct = (now, before) => before > 0 ? Math.round((now - before) / before * 100) : null;
+  const chg = (now, before) => { const p = pct(now, before); return p == null ? "" : `<span class="${p > 0 ? "red" : "green"}">${p > 0 ? "+" : ""}${p} %</span>`; };
+  const bySender = (list) => { const m = {}; list.forEach(d => { const k = senderKey(d.sender) || d.topic; m[k] = (m[k] || 0) + d.amount; }); return m; };
+  const sNow = bySender(docs), sPrev = bySender(prev);
+  const moves = [...new Set([...Object.keys(sNow), ...Object.keys(sPrev)])].map(k => [k, (sNow[k] || 0) - (sPrev[k] || 0), sNow[k] || 0, sPrev[k] || 0])
+    .filter(x => x[2] && x[3]).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 6);
   const tax = S.docs.filter(d => d.taxRelevant && (d.date || d.created || "").startsWith(String(year)));
   $("#view").innerHTML = `
     <div class="seg">${years.slice(0, 5).map(y => `<button class="${y === year ? "on" : ""}" onclick="go('/ausgaben/${y}')">${y}</button>`).join("") || `<button class="on">${year}</button>`}</div>
-    <div class="card center"><div class="small">Summe laut Belegen</div><div class="big">${fmtEur(total)}</div><div class="small">${docs.length} Belege mit Betrag</div></div>
+    <div class="card center"><div class="small">Summe laut Belegen</div><div class="big">${fmtEur(total)}</div><div class="small">${docs.length} Belege mit Betrag${prevTotal ? ` · Vorjahr ${fmtEur(prevTotal)} ${chg(total, prevTotal)}` : ""}</div></div>
     <h2>Nach Thema</h2>
     <div class="card">${Object.entries(byTopic).sort((a, b) => b[1] - a[1]).map(([t, v]) => `
-      <div class="bar"><span>${esc(topicOf(t).icon)} ${esc(t)}</span><b>${fmtEur(v)}</b></div>
+      <div class="bar"><span>${esc(topicOf(t).icon)} ${esc(t)}</span><b>${fmtEur(v)} ${chg(v, prevTopic[t] || 0)}</b></div>
       <div class="track"><div style="width:${(v / maxT * 100).toFixed(1)}%;background:${topicOf(t).color}"></div></div>`).join("") || `<p class="small">Keine Beträge in diesem Jahr.</p>`}</div>
+    ${moves.length ? `<h2>Vergleich zu ${year - 1}</h2><div class="card">${moves.map(([k, dlt, n, b]) =>
+      `<div class="bar"><span>${esc(k)}</span><b>${dlt > 0 ? "+" : ""}${fmtEur(dlt)} ${chg(n, b)}</b></div><div class="small">${fmtEur(b)} → ${fmtEur(n)}</div>`).join("")}</div>` : ""}
     <h2>Nach Monat</h2>
     <div class="card months">${byMonth.map((v, i) => `<div class="mcol"><div class="mbar" style="height:${(v / maxM * 100).toFixed(1)}%" title="${fmtEur(v)}"></div>
       <span>${"JFMAMJJASOND"[i]}</span></div>`).join("")}</div>

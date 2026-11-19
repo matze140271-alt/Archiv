@@ -27,12 +27,16 @@ async function init() {
 }
 
 async function reload() {
-  S.docs = (await DB.all()).sort((a, b) => (b.date || b.created || "").localeCompare(a.date || a.created || ""));
+  S.allDocs = (await DB.all()).sort((a, b) => (b.date || b.created || "").localeCompare(a.date || a.created || ""));
+  S.persons = await DB.kvGet("persons", []);
+  S.person = await DB.kvGet("person", "");
+  if (S.person && !S.persons.includes(S.person)) S.person = "";
+  S.docs = S.person ? S.allDocs.filter(d => (d.person || S.persons[0]) === S.person) : S.allDocs;
   S.model = null;
   updateBadge();
 }
 function model() {
-  if (!S.model) S.model = new Analyse.Model(S.docs.filter(d => d.confirmed && d.text).map(d => [d.topic, d.text.slice(0, 4000)]));
+  if (!S.model) S.model = new Analyse.Model(S.allDocs.filter(d => d.confirmed && d.text).map(d => [d.topic, d.text.slice(0, 4000)]));
   return S.model;
 }
 const topicOf = name => S.topics.find(t => t.name === name) || { name, icon: "📁", color: "#adb5bd" };
@@ -40,7 +44,7 @@ const topicOf = name => S.topics.find(t => t.name === name) || { name, icon: "�
 function route() {
   const h = decodeURIComponent(location.hash.slice(1) || "/");
   window.scrollTo(0, 0);
-  $("#fab").style.display = /^\/(dok|scan|einstellungen|themen|regeln|seiten|ausgaben|vertraege)/.test(h) ? "none" : "";
+  $("#fab").style.display = /^\/(dok|scan|einstellungen|themen|regeln|seiten|ausgaben|vertraege|garantie|aufbewahrung|notfall|personen)/.test(h) ? "none" : "";
   let m;
   if (h === "/" || h === "") return viewHome();
   if ((m = h.match(/^\/thema\/(.+)$/))) return viewTopic(m[1]);
@@ -55,6 +59,10 @@ function route() {
   if (h === "/vertraege") return viewContracts();
   if (h === "/regeln") return viewRules();
   if (h === "/eingang") return viewInbox();
+  if (h === "/garantie") return viewWarranty();
+  if (h === "/aufbewahrung") return viewRetention();
+  if (h === "/notfall") return viewEmergency();
+  if (h === "/personen") return viewPersons();
   if ((m = h.match(/^\/seiten\/(\d+)$/))) return viewPageEdit(+m[1]);
   viewHome();
 }
@@ -85,6 +93,7 @@ async function viewHome() {
   const last = await DB.kvGet("lastBackup", null);
   const needBackup = S.docs.length >= 3 && (!last || (Date.now() - last) > 30 * 86400000);
   $("#view").innerHTML = `
+    ${personBar()}
     <div class="search"><input id="q" type="search" placeholder="🔍  Suchen – Text, Absender, Betrag …" value="${esc(S.lastQ)}" autocomplete="off"></div>
     <div id="results"></div>
     <div id="home">
@@ -98,6 +107,11 @@ async function viewHome() {
         <button class="chip" onclick="go('/ausgaben')">📊<br>Ausgaben</button>
         <button class="chip" onclick="go('/vertraege')">📝<br>Verträge &amp; Abos</button>
         <button class="chip" onclick="taxPdfAsk()">🧾<br>Steuer-PDF</button>
+      </div>
+      <div class="chips">
+        <button class="chip" onclick="go('/garantie')">🔧<br>Garantien</button>
+        <button class="chip" onclick="go('/aufbewahrung')">🗄️<br>Aufbewahren</button>
+        <button class="chip" onclick="go('/notfall')">🆘<br>Notfall-Mappe</button>
       </div>
       <h2>Themen</h2>
       <div class="topics">${S.topics.map(t => `<button class="topic" style="--c:${t.color}" onclick="go('/thema/${encodeURIComponent(t.name)}')">
@@ -184,6 +198,7 @@ async function viewDoc(id) {
   $("#view").innerHTML = `
     ${d.confirmed ? "" : `<div class="banner check">✨ Automatisch erkannt: <b>${t.icon} ${esc(d.topic)}</b>. Stimmt das? Sonst unten ändern.
       <button class="btn small" onclick="confirmDoc(${id})">Passt so ✓</button></div>`}
+    ${dupBanner(d)}
     <div id="pages" class="pages-view"><p class="small">Wird geladen …</p></div>
     <div class="actions">
       <button class="btn sec" onclick="shareDoc(${id})">📤 Teilen / Sichern</button>
@@ -217,16 +232,24 @@ async function viewDoc(id) {
         <label class="chk"><input type="checkbox" name="contractActive" ${d.contractActive === false ? "" : "checked"}> Vertrag läuft noch</label>
       </details>
       <label class="chk"><input type="checkbox" name="taxRelevant" ${d.taxRelevant ? "checked" : ""}> Für die Steuer relevant</label>
+      <label class="chk"><input type="checkbox" name="emergency" ${d.emergency ? "checked" : ""}> In die Notfall-Mappe</label>
+      ${S.persons.length ? `<label>Gehört zu</label><select class="f" name="person">${S.persons.map(p => `<option ${(d.person || S.persons[0]) === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>` : ""}
+      <label>Aufbewahren</label><select class="f" name="retention">
+        <option value="">Automatisch – ${esc(retentionInfo(d, true).label)}</option>
+        <option value="dauerhaft" ${d.retention === "dauerhaft" ? "selected" : ""}>Original dauerhaft aufheben</option>
+        <option value="scan" ${d.retention === "scan" ? "selected" : ""}>Scan genügt – Papier darf weg</option></select>
       <label>Papier-Original liegt in</label><input class="f" name="original" value="${esc(d.original || "")}" placeholder="z. B. Ordner Versicherungen">
       <label>Notiz</label><textarea class="f" name="note" rows="2">${esc(d.note || "")}</textarea>
       <button class="btn" type="submit">Speichern</button>
     </form>
     ${d.sender ? `<button class="btn sec" onclick="ruleFromDoc(${id})">📌 Alles von „${esc(senderKey(d.sender))}“ immer nach ${esc(topicOf(d.topic).icon)} ${esc(d.topic)}</button>` : ""}
+    <div id="similar"></div>
     <details class="card"><summary>Erkannter Text</summary><pre class="ocr">${esc(d.text || "(kein Text erkannt)")}</pre></details>
     <p class="small center">Hinzugefügt am ${esc(new Date(d.created).toLocaleString("de-DE"))}${d.fileName ? " · " + esc(d.fileName) : ""}</p>
     <button class="btn danger" onclick="deleteDoc(${id})">🗑 Dokument löschen</button>`;
   $("#f").addEventListener("submit", async e => { e.preventDefault(); await saveForm(id, new FormData(e.target)); });
   renderPages(d);
+  renderSimilar(d);
 }
 
 async function renderPages(d) {
@@ -272,6 +295,9 @@ async function saveForm(id, fd) {
   const ca = (fd.get("costAmount") || "").trim().replace(/\./g, "").replace(",", ".");
   d.costAmount = ca && !isNaN(+ca) ? +ca : null;
   d.taxRelevant = !!fd.get("taxRelevant");
+  d.emergency = !!fd.get("emergency");
+  d.retention = fd.get("retention") || "";
+  if (fd.get("person")) d.person = fd.get("person");
   d.contractActive = !!fd.get("contractActive");
   if (d.contractEnd && d.noticePeriod && !d.cancelBy) d.cancelBy = cancelDate(d.contractEnd, d.noticePeriod);
   d.confirmed = true;
@@ -363,6 +389,7 @@ function cropEditor(canvas, corners) {
         <button data-a="cancel">Verwerfen</button>
         <button data-a="full">Ganzes Bild</button>
         <button data-a="rot">⟳ Drehen</button>
+        <button data-a="next" class="ok next">＋ Nächste Seite 📷</button>
         <button data-a="ok" class="ok">Übernehmen</button></div>`;
     document.body.appendChild(ov);
     const stage = $(".crop-stage", ov), cv = $("canvas", ov), svg = $("svg", ov);
@@ -407,7 +434,8 @@ function cropEditor(canvas, corners) {
         q = q.map(([x, y]) => [H - y, x]); q = [q[3], q[0], q[1], q[2]];
         W = canvas.width; H = canvas.height; return layout();
       }
-      if (a === "ok") {
+      if (a === "next") { $("#in-camera").click(); }      // Kamera sofort wieder öffnen (muss direkt im Tippen passieren)
+      if (a === "ok" || a === "next") {
         busy("Wird entzerrt …"); await new Promise(r => setTimeout(r, 30));
         try {
           const full = q.every(([x, y], i) => Math.hypot(x - [0, W, W, 0][i], y - [0, 0, H, H][i]) < 3);
@@ -535,6 +563,8 @@ async function createDoc({ kind, mime, files, text, topic, fileName, titleHint, 
     bic: a.bic, payName: a.payName, payRef: a.payRef,
   };
   if (!topic) await applyRules(doc);
+  if (S.persons.length) doc.person = S.person || S.persons[0];
+  try { await markDuplicate(doc, files); } catch (e) { }
   try { doc.thumb = thumbCanvas ? await makeThumb(thumbCanvas) : thumbFrom ? await makeThumb(thumbFrom) : ""; } catch (e) { doc.thumb = ""; }
   const id = await DB.put(doc);
   for (let i = 0; i < files.length; i++) await DB.putFile(id, i, files[i]);
@@ -584,6 +614,11 @@ async function viewSettings() {
       <button class="btn sec" onclick="go('/themen')">Themen bearbeiten</button>
     </div>
     <div class="card">
+      <h3>👥 Personen</h3>
+      <p class="small">${S.persons.length ? "Getrennte Bereiche: " + S.persons.map(esc).join(", ") : "Optional: getrennte Bereiche für mehrere Personen im selben Archiv."}</p>
+      <button class="btn sec" onclick="go('/personen')">Personen verwalten</button>
+    </div>
+    <div class="card">
       <h3>📌 Absender-Regeln</h3>
       <p class="small">Feste Zuordnung: z. B. alles von Debeka immer zu Versicherungen.</p>
       <button class="btn sec" onclick="go('/regeln')">Regeln verwalten (${(await DB.kvGet("rules", [])).length})</button>
@@ -616,7 +651,7 @@ async function exportBackup() {
   try {
     const zip = new JSZip(); const docs = await DB.all();
     zip.file("archiv.json", JSON.stringify({ app: "dokumentenarchiv-ios", version: 1, exported: new Date().toISOString(), topics: S.topics,
-      rules: await DB.kvGet("rules", []), docs }, null, 1));
+      rules: await DB.kvGet("rules", []), persons: await DB.kvGet("persons", []), emergencyNote: await DB.kvGet("emergencyNote", ""), docs }, null, 1));
     for (const d of docs) for (let i = 0; i < (d.files || 0); i++) {
       const b = await DB.getFile(d.id, i); if (b) zip.file(`dateien/${d.id}_${i}`, b);
     }
@@ -651,12 +686,14 @@ async function importBackup(file) {
     const zip = await JSZip.loadAsync(data);
     const meta = JSON.parse(await zip.file("archiv.json").async("string"));
     if (meta.topics && meta.topics.length) { S.topics = meta.topics; await DB.kvSet("topics", S.topics); }
+    if (meta.persons && meta.persons.length) await DB.kvSet("persons", [...new Set([...(await DB.kvGet("persons", [])), ...meta.persons])]);
+    if (meta.emergencyNote && !(await DB.kvGet("emergencyNote", ""))) await DB.kvSet("emergencyNote", meta.emergencyNote);
     if (meta.rules && meta.rules.length) {
       const rules = await DB.kvGet("rules", []);
       for (const r of meta.rules) if (!rules.some(x => x.match === r.match)) rules.push(r);
       await DB.kvSet("rules", rules);
     }
-    const have = new Set(S.docs.map(d => d.created + "|" + d.title));
+    const have = new Set(S.allDocs.map(d => d.created + "|" + d.title));
     let n = 0;
     for (const d of meta.docs) {
       if (have.has(d.created + "|" + d.title)) continue;
@@ -765,7 +802,9 @@ async function enableBadge() {
 async function updateBadge() {
   try {
     if (!("setAppBadge" in navigator) || !(await DB.kvGet("badge", false))) return;
-    const n = deadlineItems().filter(x => !x.date || daysUntil(x.date) <= 14).length;
+    const last = await DB.kvGet("lastBackup", null);
+    const n = deadlineItems().filter(x => !x.date || daysUntil(x.date) <= 14).length
+      + (S.allDocs.length >= 3 && (!last || Date.now() - last > 30 * 86400000) ? 1 : 0);
     n ? navigator.setAppBadge(n) : navigator.clearAppBadge();
   } catch (e) { }
 }

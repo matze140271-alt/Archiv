@@ -1,11 +1,12 @@
 /* Offline-Speicher der App: alle Programmdateien werden auf dem iPhone zwischengespeichert. */
-const VERSION = "archiv-1.1.0";
+const VERSION = "archiv-1.2.0";
 const FILES = [
   "./",
   "analyse.js",
   "app.js",
   "db.js",
   "extras.js",
+  "extras2.js",
   "deu.traineddata.gz",
   "icon-180.png",
   "icon-192.png",

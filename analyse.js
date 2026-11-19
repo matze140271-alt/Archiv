@@ -45,6 +45,8 @@
       "comdirect", "consorsbank", "postbank", "santander", "targobank", "trade republic", "scalable capital", "paypal",
       "union investment", "deka"],
     "Steuern": ["finanzamt"],
+    "Rechnungen & Kaufbelege": ["mediamarkt", "media markt", "saturn", "amazon", "otto gmbh", "ikea", "obi ", "bauhaus", "hornbach", "cyberport",
+      "notebooksbilliger", "lidl", "aldi", "rewe", "edeka", "rossmann", "zalando", "conrad electronic", "expert ", "euronics", "toom", "decathlon"],
     "Wohnen & Energie": ["octopus energy", "stadtwerke", "e.on", "vattenfall", "eprimo", "yello", "rheinenergie"],
     "Verträge & Abos": ["telekom deutschland", "vodafone", "telefónica", "1&1", "congstar", "netflix", "spotify", "sky deutschland"],
     "Auto & Mobilität": ["volkswagen", "cupra", "autohaus", "tüv nord", "tüv süd", "dekra", "adac"],
