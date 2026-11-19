@@ -198,7 +198,7 @@
       if (/(datum|den|vom|ausgestellt|rechnungsdatum|belegdatum)[:\s]*$/.test(before) && dt <= t0) return iso(dt);
     for (const [, dt, before] of found.sort((a, b) => a[0] - b[0]))
       if (dt <= t0 && !before.includes("geb")) return iso(dt);
-    return iso(found[0][1]);
+    return null;   // nur Daten in der Zukunft (Fristen, Laufzeiten) – kein Dokumentdatum
   }
 
   function detectAmount(text) {
@@ -305,9 +305,54 @@
     if (m) { out.costAmount = num(m[m.length - 1]); out.costInterval = "monatlich"; }
     else if ((m = tl.match(/(jährlich|jahresbeitrag|pro jahr|\/ ?jahr|jahresprämie)[^\d\n]{0,25}?(\d{1,5}(?:\.\d{3})*,\d{2})/))) { out.costAmount = num(m[2]); out.costInterval = "jährlich"; }
     if (topic === "Steuern" || topic === "Arbeit & Gehalt" || /(?<![a-zäöüß])(steuer|lohnsteuer|spendenbescheinigung|zuwendungsbestätigung|handwerkerleistung|haushaltsnahe|nebenkostenabrechnung|riester|rürup|kirchensteuer|werbungskosten)/.test(tl)) out.taxRelevant = true;
-    m = (text || "").replace(/\s/g, "").match(/DE\d{20}/);
-    if (m) out.iban = m[0];
+    Object.assign(out, detectPayment(text));
     return out;
+  }
+
+  // ------------------------------------------------ Zahlungsdaten fuer GiroCode
+  function ibanOk(iban) {
+    iban = (iban || "").replace(/\s/g, "").toUpperCase();
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+    if (iban.startsWith("DE") && iban.length !== 22) return false;
+    const s = iban.slice(4) + iban.slice(0, 4);
+    let r = 0;
+    for (const c of s) { const v = parseInt(c, 36); r = (r * (v > 9 ? 100 : 10) + v) % 97; }
+    return r === 1;
+  }
+  function detectPayment(text) {
+    const t = (text || "").replace(/[ \t\u00a0]+/g, " "), tl = t.toLowerCase();
+    const out = { iban: "", bic: "", payName: "", payRef: "" };
+    const cands = [];
+    for (const m of t.matchAll(/\b([A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?)\b/g)) {
+      const raw = m[1].replace(/ /g, "");
+      for (const ln of [22, raw.length]) {
+        const c = raw.slice(0, ln);
+        if (ibanOk(c)) {
+          const ctx = tl.slice(Math.max(0, m.index - 160), m.index); let score = 0;
+          if (/(empfänger|bankverbindung|zahlbar|überweis|bitte zahlen|konto(?:verbindung)?:|zugunsten|auf das konto|auf unser konto)/.test(ctx)) score += 2;
+          if (/(ihr konto|ihre iban|von folgender bankverbindung|abgebucht|lastschrift|ihrem konto|deinem konto)/.test(ctx)) score -= 3;
+          cands.push([score, m.index, c, m.index + m[0].length]); break;
+        }
+      }
+    }
+    if (cands.length) {
+      cands.sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+      const [, pos, iban, end] = cands[0]; out.iban = iban;
+      const near = t.slice(Math.max(0, pos - 200), end + 120);
+      const b = near.match(/\bBIC[:\s]*([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b/); if (b) out.bic = b[1];
+      const n = near.match(/(?:empfänger|kontoinhaber|zahlungsempfänger)[:\s]+([^\n]{3,60})/i); if (n) out.payName = n[1].trim().replace(/^:|:$/g, "").slice(0, 70);
+    }
+    for (const re of [/verwendungszweck[:\s]+([^\n]{3,60})/i, /rechnungs?-? ?(?:nummer|nr\.?)[:\s]*([A-Z0-9][A-Z0-9\-\/ ]{2,30}[A-Z0-9])/i,
+      /(?:kunden|kund\*innen)-? ?(?:nummer|nr\.?)[:\s]*([A-Z0-9][A-Z0-9\-\/ ]{2,30}[A-Z0-9])/i]) {
+      const m = t.match(re);
+      if (m) { const ref = m[1].trim().split(/\s{2,}/)[0]; if (/\d/.test(ref)) { out.payRef = ref.slice(0, 60); break; } }
+    }
+    return out;
+  }
+  function epcPayload(name, iban, bic, amount, ref) {
+    const lines = ["BCD", "002", "1", "SCT", (bic || "").trim(), (name || "Empfänger").slice(0, 70),
+      (iban || "").replace(/\s/g, "").toUpperCase(), amount ? "EUR" + Number(amount).toFixed(2) : "", "", "", (ref || "").slice(0, 140)];
+    return lines.join("\n").replace(/\n+$/, "");
   }
 
   function analyze(text, topics, model) {
@@ -318,5 +363,5 @@
       detectExtras(text, doctype, topic, date));
   }
 
-  root.Analyse = { DEFAULT_TOPICS, Model, analyze, tokenize, classifyTopic, parseDate, iso, addMonths };
+  root.Analyse = { DEFAULT_TOPICS, Model, analyze, tokenize, classifyTopic, parseDate, iso, addMonths, addDays, ibanOk, epcPayload, detectPayment };
 })(typeof window !== "undefined" ? window : globalThis);

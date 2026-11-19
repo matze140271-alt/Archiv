@@ -1,10 +1,11 @@
 /* Offline-Speicher der App: alle Programmdateien werden auf dem iPhone zwischengespeichert. */
-const VERSION = "archiv-1.0.1";
+const VERSION = "archiv-1.1.0";
 const FILES = [
   "./",
   "analyse.js",
   "app.js",
   "db.js",
+  "extras.js",
   "deu.traineddata.gz",
   "icon-180.png",
   "icon-192.png",
@@ -15,6 +16,7 @@ const FILES = [
   "manifest.json",
   "pdf.min.js",
   "pdf.worker.min.js",
+  "qrcode.js",
   "scan.js",
   "tesseract-core-lstm.wasm.js",
   "tesseract-core-simd-lstm.wasm.js",

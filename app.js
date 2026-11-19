@@ -40,7 +40,7 @@ const topicOf = name => S.topics.find(t => t.name === name) || { name, icon: "�
 function route() {
   const h = decodeURIComponent(location.hash.slice(1) || "/");
   window.scrollTo(0, 0);
-  $("#fab").style.display = /^\/(dok|scan|einstellungen|themen)/.test(h) ? "none" : "";
+  $("#fab").style.display = /^\/(dok|scan|einstellungen|themen|regeln|seiten|ausgaben|vertraege)/.test(h) ? "none" : "";
   let m;
   if (h === "/" || h === "") return viewHome();
   if ((m = h.match(/^\/thema\/(.+)$/))) return viewTopic(m[1]);
@@ -51,6 +51,11 @@ function route() {
   if (h === "/einstellungen") return viewSettings();
   if (h === "/themen") return viewTopicsEdit();
   if (h === "/alle") return viewList("Alle Dokumente", S.docs, "Noch keine Dokumente.");
+  if ((m = h.match(/^\/ausgaben(?:\/(\d{4}))?$/))) return viewSpending(m[1] ? +m[1] : null);
+  if (h === "/vertraege") return viewContracts();
+  if (h === "/regeln") return viewRules();
+  if (h === "/eingang") return viewInbox();
+  if ((m = h.match(/^\/seiten\/(\d+)$/))) return viewPageEdit(+m[1]);
   viewHome();
 }
 const go = h => { if (location.hash === "#" + h) route(); else location.hash = h; };
@@ -88,6 +93,11 @@ async function viewHome() {
         <button class="chip ${open ? "warn" : ""}" onclick="go('/pruefen')"><b>${open}</b> zu prüfen</button>
         <button class="chip ${urgent ? "warn" : ""}" onclick="go('/fristen')"><b>${dl.length}</b> Fristen &amp; offen</button>
         <button class="chip" onclick="go('/alle')"><b>${S.docs.length}</b> Dokumente</button>
+      </div>
+      <div class="chips">
+        <button class="chip" onclick="go('/ausgaben')">📊<br>Ausgaben</button>
+        <button class="chip" onclick="go('/vertraege')">📝<br>Verträge &amp; Abos</button>
+        <button class="chip" onclick="taxPdfAsk()">🧾<br>Steuer-PDF</button>
       </div>
       <h2>Themen</h2>
       <div class="topics">${S.topics.map(t => `<button class="topic" style="--c:${t.color}" onclick="go('/thema/${encodeURIComponent(t.name)}')">
@@ -160,7 +170,7 @@ function viewDeadlines() {
       <a class="meta" href="#/dok/${x.d.id}"><div class="it">${esc(x.art)}: ${esc(x.d.title)}</div>
       <div class="is ${n != null && n <= 3 ? "red" : ""}">${x.date ? fmtDate(x.date) + " · " : ""}${when}${x.d.amount != null ? " · " + fmtEur(x.d.amount) : ""}</div></a>
       ${x.art.includes("offen") ? `<button class="mini" onclick="markPaid(${x.d.id})">✓ bezahlt</button>` : ""}</div>`;
-  }).join("")}</div>` : `<p class="empty">Keine offenen Rechnungen oder Fristen. 🎉</p>`;
+  }).join("")}</div><button class="btn sec" onclick="allDeadlinesToCalendar()">📅 Alle Fristen in den iPhone-Kalender</button>` : `<p class="empty">Keine offenen Rechnungen oder Fristen. 🎉</p>`;
 }
 async function markPaid(id) { const d = await DB.get(id); d.paid = true; await DB.put(d); await reload(); route(); toast("Als bezahlt markiert"); }
 
@@ -177,8 +187,9 @@ async function viewDoc(id) {
     <div id="pages" class="pages-view"><p class="small">Wird geladen …</p></div>
     <div class="actions">
       <button class="btn sec" onclick="shareDoc(${id})">📤 Teilen / Sichern</button>
-      <button class="btn sec" onclick="addPagesTo(${id})" ${d.kind === "scan" ? "" : "style='display:none'"}>📷 Seite dazu</button>
+      ${d.kind === "scan" ? `<button class="btn sec" onclick="go('/seiten/${id}')">✏️ Seiten</button>` : ""}
     </div>
+    ${girocodeCard(d)}
     <form class="card" id="f">
       <label>Titel</label><input class="f" name="title" value="${esc(d.title)}">
       <label>Thema</label><select class="f" name="topic">${opt}</select>
@@ -192,12 +203,25 @@ async function viewDoc(id) {
           <div><label>Bezahlt?</label><select class="f" name="paid"><option value="">–</option><option value="0" ${d.paid === false ? "selected" : ""}>offen</option><option value="1" ${d.paid === true ? "selected" : ""}>bezahlt</option></select></div></div>
         <div class="row"><div><label>Kündigen bis</label><input class="f" type="date" name="cancelBy" value="${esc(d.cancelBy || "")}"></div>
           <div><label>Garantie bis</label><input class="f" type="date" name="warrantyUntil" value="${esc(d.warrantyUntil || "")}"></div></div>
-        ${d.iban ? `<p class="small">IBAN im Dokument: <b>${esc(d.iban.replace(/(.{4})/g, "$1 ").trim())}</b> <button type="button" class="mini" onclick="copyText('${esc(d.iban)}')">kopieren</button></p>` : ""}
+        <label>Empfänger (für Überweisung)</label><input class="f" name="payName" value="${esc(d.payName || d.sender || "")}">
+        <div class="row"><div><label>IBAN</label><input class="f" name="iban" value="${esc((d.iban || "").replace(/(.{4})/g, "$1 ").trim())}" autocapitalize="characters"></div>
+          <div><label>BIC (optional)</label><input class="f" name="bic" value="${esc(d.bic || "")}" autocapitalize="characters"></div></div>
+        <label>Verwendungszweck</label><input class="f" name="payRef" value="${esc(d.payRef || "")}">
+        ${calButtons(d)}
       </details>
+      <details ${d.costAmount || d.contractEnd || d.noticePeriod ? "open" : ""}><summary>Vertrag &amp; Kosten</summary>
+        <div class="row"><div><label>Kosten (€)</label><input class="f" name="costAmount" inputmode="decimal" value="${d.costAmount != null ? Number(d.costAmount).toFixed(2).replace(".", ",") : ""}"></div>
+          <div><label>Zeitraum</label><select class="f" name="costInterval">${["", "monatlich", "vierteljährlich", "halbjährlich", "jährlich"].map(v => `<option ${d.costInterval === v ? "selected" : ""} value="${v}">${v || "–"}</option>`).join("")}</select></div></div>
+        <div class="row"><div><label>Vertragsende</label><input class="f" type="date" name="contractEnd" value="${esc(d.contractEnd || "")}"></div>
+          <div><label>Kündigungsfrist</label><input class="f" name="noticePeriod" value="${esc(d.noticePeriod || "")}" placeholder="z. B. 3 Monate"></div></div>
+        <label class="chk"><input type="checkbox" name="contractActive" ${d.contractActive === false ? "" : "checked"}> Vertrag läuft noch</label>
+      </details>
+      <label class="chk"><input type="checkbox" name="taxRelevant" ${d.taxRelevant ? "checked" : ""}> Für die Steuer relevant</label>
       <label>Papier-Original liegt in</label><input class="f" name="original" value="${esc(d.original || "")}" placeholder="z. B. Ordner Versicherungen">
       <label>Notiz</label><textarea class="f" name="note" rows="2">${esc(d.note || "")}</textarea>
       <button class="btn" type="submit">Speichern</button>
     </form>
+    ${d.sender ? `<button class="btn sec" onclick="ruleFromDoc(${id})">📌 Alles von „${esc(senderKey(d.sender))}“ immer nach ${esc(topicOf(d.topic).icon)} ${esc(d.topic)}</button>` : ""}
     <details class="card"><summary>Erkannter Text</summary><pre class="ocr">${esc(d.text || "(kein Text erkannt)")}</pre></details>
     <p class="small center">Hinzugefügt am ${esc(new Date(d.created).toLocaleString("de-DE"))}${d.fileName ? " · " + esc(d.fileName) : ""}</p>
     <button class="btn danger" onclick="deleteDoc(${id})">🗑 Dokument löschen</button>`;
@@ -241,6 +265,15 @@ async function saveForm(id, fd) {
   const a = (fd.get("amount") || "").trim().replace(/\./g, "").replace(",", ".");
   d.amount = a && !isNaN(+a) ? +a : null;
   d.paid = fd.get("paid") === "" ? null : fd.get("paid") === "1";
+  for (const k of ["payName", "bic", "payRef", "noticePeriod", "costInterval"]) d[k] = (fd.get(k) || "").trim();
+  d.iban = (fd.get("iban") || "").replace(/\s/g, "").toUpperCase();
+  d.bic = d.bic.toUpperCase();
+  d.contractEnd = fd.get("contractEnd") || null;
+  const ca = (fd.get("costAmount") || "").trim().replace(/\./g, "").replace(",", ".");
+  d.costAmount = ca && !isNaN(+ca) ? +ca : null;
+  d.taxRelevant = !!fd.get("taxRelevant");
+  d.contractActive = !!fd.get("contractActive");
+  if (d.contractEnd && d.noticePeriod && !d.cancelBy) d.cancelBy = cancelDate(d.contractEnd, d.noticePeriod);
   d.confirmed = true;
   await DB.put(d); await reload();
   toast(oldTopic !== d.topic ? "Gespeichert – die App merkt sich das Thema" : "Gespeichert");
@@ -499,7 +532,9 @@ async function createDoc({ kind, mime, files, text, topic, fileName, titleHint, 
     doctype: a.doctype, sender: a.sender, date: a.date, amount: a.amount, tags: a.tags, note: "", original: "",
     dueDate: a.dueDate, paid: a.paid, warrantyUntil: a.warrantyUntil, contractEnd: a.contractEnd, cancelBy: a.cancelBy,
     noticePeriod: a.noticePeriod, costAmount: a.costAmount, costInterval: a.costInterval, taxRelevant: a.taxRelevant, iban: a.iban,
+    bic: a.bic, payName: a.payName, payRef: a.payRef,
   };
+  if (!topic) await applyRules(doc);
   try { doc.thumb = thumbCanvas ? await makeThumb(thumbCanvas) : thumbFrom ? await makeThumb(thumbFrom) : ""; } catch (e) { doc.thumb = ""; }
   const id = await DB.put(doc);
   for (let i = 0; i < files.length; i++) await DB.putFile(id, i, files[i]);
@@ -549,10 +584,21 @@ async function viewSettings() {
       <button class="btn sec" onclick="go('/themen')">Themen bearbeiten</button>
     </div>
     <div class="card">
+      <h3>📌 Absender-Regeln</h3>
+      <p class="small">Feste Zuordnung: z. B. alles von Debeka immer zu Versicherungen.</p>
+      <button class="btn sec" onclick="go('/regeln')">Regeln verwalten (${(await DB.kvGet("rules", [])).length})</button>
+    </div>
+    <div class="card">
       <h3>🔒 App-Sperre</h3>
       <p class="small">${pin ? "Die App ist mit einem Code geschützt." : "Optional: Beim Öffnen einen 4-stelligen Code verlangen."}</p>
       <button class="btn sec" onclick="setPin()">${pin ? "Code ändern" : "Code festlegen"}</button>
-      ${pin ? `<button class="btn sec" onclick="removePin()">Code entfernen</button>` : ""}
+      ${pin ? `<button class="btn sec" onclick="toggleFaceId()">${(await DB.kvGet("faceid", null)) ? "Face ID ausschalten" : "Mit Face ID entsperren"}</button>
+      <button class="btn sec" onclick="removePin()">Code entfernen</button>` : ""}
+    </div>
+    <div class="card">
+      <h3>📥 Aus Mail &amp; anderen Apps</h3>
+      <p class="small">PDFs aus Mail per Kurzbefehl in einem Rutsch ablegen und dann hier übernehmen.</p>
+      <button class="btn sec" onclick="shortcutHelp()">So geht's</button>
     </div>
     <div class="card">
       <h3>🔴 Zähler am App-Symbol</h3>
@@ -563,15 +609,24 @@ async function viewSettings() {
 }
 
 async function exportBackup() {
+  const pw = await passwordSheet("Sicherung verschlüsseln",
+    "Mit Passwort ist die Sicherung in iCloud für niemanden lesbar. Das Passwort gut merken – ohne es lässt sich die Sicherung nicht mehr öffnen.", true);
+  if (pw === null) return;
   busy("Sicherung wird erstellt …");
   try {
     const zip = new JSZip(); const docs = await DB.all();
-    zip.file("archiv.json", JSON.stringify({ app: "dokumentenarchiv-ios", version: 1, exported: new Date().toISOString(), topics: S.topics, docs }, null, 1));
+    zip.file("archiv.json", JSON.stringify({ app: "dokumentenarchiv-ios", version: 1, exported: new Date().toISOString(), topics: S.topics,
+      rules: await DB.kvGet("rules", []), docs }, null, 1));
     for (const d of docs) for (let i = 0; i < (d.files || 0); i++) {
       const b = await DB.getFile(d.id, i); if (b) zip.file(`dateien/${d.id}_${i}`, b);
     }
-    const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
-    const f = new File([blob], `Archiv-Sicherung ${todayIso()}.zip`, { type: "application/zip" });
+    let blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    let f;
+    if (pw) {
+      busy("Sicherung wird verschlüsselt …");
+      blob = await encryptBlob(blob, pw);
+      f = new File([blob], `Archiv-Sicherung ${todayIso()}.archiv`, { type: "application/octet-stream" });
+    } else f = new File([blob], `Archiv-Sicherung ${todayIso()}.zip`, { type: "application/zip" });
     busy();
     await shareFile(f, "Archiv-Sicherung");
     await DB.kvSet("lastBackup", Date.now());
@@ -583,9 +638,24 @@ async function importBackup(file) {
   if (!await ask("Sicherung einspielen? Dokumente aus der Sicherung werden hinzugefügt, doppelte übersprungen.", "Einspielen")) return;
   busy("Sicherung wird gelesen …");
   try {
-    const zip = await JSZip.loadAsync(file);
+    let data = file;
+    if (await isEncrypted(file)) {
+      busy();
+      for (; ;) {
+        const pw = await passwordSheet("Passwort der Sicherung", "Diese Sicherung ist verschlüsselt.", false);
+        if (pw === null) return;
+        busy("Wird entschlüsselt …");
+        try { data = await decryptBlob(file, pw); break; } catch (e) { busy(); toast("Falsches Passwort"); }
+      }
+    }
+    const zip = await JSZip.loadAsync(data);
     const meta = JSON.parse(await zip.file("archiv.json").async("string"));
     if (meta.topics && meta.topics.length) { S.topics = meta.topics; await DB.kvSet("topics", S.topics); }
+    if (meta.rules && meta.rules.length) {
+      const rules = await DB.kvGet("rules", []);
+      for (const r of meta.rules) if (!rules.some(x => x.match === r.match)) rules.push(r);
+      await DB.kvSet("rules", rules);
+    }
     const have = new Set(S.docs.map(d => d.created + "|" + d.title));
     let n = 0;
     for (const d of meta.docs) {
@@ -641,7 +711,7 @@ async function setPin() {
   if (a !== b) return toast("Codes stimmen nicht überein");
   await DB.kvSet("pin", await sha(a)); toast("Code festgelegt"); viewSettings();
 }
-async function removePin() { await DB.kvSet("pin", null); toast("Code entfernt"); viewSettings(); }
+async function removePin() { await DB.kvSet("pin", null); await DB.kvSet("faceid", null); toast("Code entfernt"); viewSettings(); }
 let hiddenAt = 0;
 async function onVisibility() {
   if (document.hidden) { hiddenAt = Date.now(); return; }
@@ -651,24 +721,30 @@ async function onVisibility() {
 async function lockScreen() {
   if ($(".pinpad")) return;
   const want = await DB.kvGet("pin", null);
+  const fid = await DB.kvGet("faceid", null);
   for (; ;) {
-    const p = await pinPad("Code eingeben", true);
+    const p = await pinPad("Code eingeben", true, fid);
+    if (p === FACE_OK) break;
     if (p && await sha(p) === want) break;
     toast("Falscher Code");
   }
   route();
 }
-function pinPad(title, locked) {
+const FACE_OK = "__face__";
+function pinPad(title, locked, faceId) {
   return new Promise(res => {
     let v = ""; const ov = document.createElement("div"); ov.className = "pinpad";
     const keys = [1, 2, 3, 4, 5, 6, 7, 8, 9, "", 0, "⌫"];
-    ov.innerHTML = `<div class="pt">${title}</div><div class="pd"></div><div class="pk">${keys.map(k => `<button ${k === "" ? "disabled" : ""}>${k}</button>`).join("")}</div>${locked ? "" : `<button class="pc">Abbrechen</button>`}`;
+    ov.innerHTML = `<div class="pt">${title}</div><div class="pd"></div><div class="pk">${keys.map(k => `<button ${k === "" ? "disabled" : ""}>${k}</button>`).join("")}</div>${locked ? "" : `<button class="pc">Abbrechen</button>`}${faceId ? `<button class="pf">🙂 Face ID</button>` : ""}`;
     document.body.appendChild(ov);
+    const tryFace = async () => { if (await faceIdCheck(faceId)) { ov.remove(); res(FACE_OK); } };
+    if (faceId) { $(".pf", ov).onclick = tryFace; tryFace(); }
     const dots = () => $(".pd", ov).innerHTML = [0, 1, 2, 3].map(i => `<span class="${i < v.length ? "on" : ""}"></span>`).join("");
     dots();
     ov.addEventListener("click", e => {
       const t = e.target; if (t.tagName !== "BUTTON") return;
       if (t.classList.contains("pc")) { ov.remove(); return res(null); }
+      if (t.classList.contains("pf")) return;
       const k = t.textContent;
       if (k === "⌫") v = v.slice(0, -1); else if (/\d/.test(k) && v.length < 4) v += k;
       dots();
